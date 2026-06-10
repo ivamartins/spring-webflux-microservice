@@ -55,11 +55,30 @@ public class OrderController {
     @GetMapping
     public Flux<Order> list(
             @RequestParam(required = false) String customerId,
-            @RequestParam(required = false) String status
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false, defaultValue = "postgres") String source
     ) {
-        if (customerId != null) return service.listByCustomer(customerId);
+        if (customerId != null) {
+            // "mongo" reads from the denormalized read model (CQRS-lite)
+            if ("mongo".equalsIgnoreCase(source)) {
+                return service.listByCustomerFromMongo(customerId);
+            }
+            return service.listByCustomer(customerId);
+        }
         if (status != null)     return service.listByStatus(status);
         return Flux.empty();
+    }
+
+    /**
+     * Returns the order enriched with data from a legacy HTTP system.
+     * If the legacy is down, the order is still returned with a flag
+     * indicating the legacy data is unavailable.
+     */
+    @GetMapping("/{id}/legacy-data")
+    public Mono<ResponseEntity<OrderService.OrderWithLegacy>> getWithLegacyData(@PathVariable UUID id) {
+        return service.getWithLegacyData(id)
+                .map(ResponseEntity::ok)
+                .defaultIfEmpty(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}/status")

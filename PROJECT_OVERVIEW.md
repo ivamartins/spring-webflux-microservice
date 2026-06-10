@@ -27,8 +27,8 @@ Reactive **Order management** microservice built with **Java 21 + Spring Boot 3.
 ### 1. Create order — `POST /api/orders`
 Bean Validation on the request body → `OrderService.create`:
 1. Builds the `Order` domain (UUID, customerId, amount, ISO-3 currency, status, createdAt).
-2. Persists in **Postgres** via `OrderRepository` (R2DBC).
-3. Mirrors to **MongoDB** (`mirrorToMongo`) — read model.
+2. Persists in **Postgres** via `OrderRepository` (R2DBC) — **system of record**.
+3. Mirrors to **MongoDB** (`mirrorToMongo`) — denormalized read model.
 4. Warms cache in **Redis** (`warmCache`).
 5. Publishes `OrderEventPublisher.publishCreated` to **Kafka**.
 6. `onErrorResume` on any fan-out failure: the API keeps responding even if Mongo/Kafka are degraded.
@@ -37,8 +37,10 @@ Bean Validation on the request body → `OrderService.create`:
 - Tries **Redis** first.
 - On miss, reads **Postgres** (R2DBC), writes to cache and returns.
 
-### 3. List orders — `GET /api/orders?customerId=X` or `?status=X`
-- Reads directly from **Postgres** (R2DBC), returns `Flux<Order>`.
+### 3. List orders — `GET /api/orders?customerId=X&source=postgres|mongo` or `?status=X`
+- **`source=postgres`** (default): reads from **Postgres** via `OrderRepository` (R2DBC) — `service.listByCustomer`.
+- **`source=mongo`**: reads from **MongoDB** via `OrderViewRepository` — `service.listByCustomerFromMongo`. Demonstrates the **CQRS-lite** pattern: Postgres is the source of truth; Mongo is the denormalized projection optimized for read-heavy paths (e.g. customer dashboard aggregating all orders).
+- `?status=X` reads from Postgres.
 
 ### 4. Change status — `PUT /api/orders/{id}/status`
 1. Reads from Postgres.
@@ -50,10 +52,24 @@ Bean Validation on the request body → `OrderService.create`:
 ### 5. Consume events — `OrderEventConsumer`
 - Kafka listener that processes `OrderCreated` / `OrderStatusChanged` events published by the service itself or by other services.
 
-### 6. Legacy integrations
-- `LegacyHttpClient` (WebClient) — HTTP calls to legacy systems.
-- `LegacyErpClient` / `LegacyErpService` / `LegacyErpServiceImpl` (Apache CXF) — SOAP/XML to ERP.
-- `SftpClient` (JSch) — file exchange via SFTP.
+### 6. Order enriched with legacy system — `GET /api/orders/{id}/legacy-data`
+Composes the canonical order with data from a legacy HTTP system (`LegacyHttpClient` → `WebClient`):
+1. Fetches the order via `service.get(id)` (cache-aside Redis → Postgres).
+2. Calls `GET /customers/{customerId}/profile` on the legacy system.
+3. Returns `{ order, legacyPayload, source }` in a single response.
+4. `onErrorResume` on any legacy failure: the order is still returned with `source: "LEGACY_UNAVAILABLE"` — the API doesn't go down with the legacy.
+
+### 7. Legacy integrations
+- `LegacyHttpClient` (WebClient) — HTTP calls to legacy systems. **Used in production by the `/legacy-data` endpoint.**
+- `LegacyErpClient` / `LegacyErpService` / `LegacyErpServiceImpl` (Apache CXF) — SOAP/XML to ERP (bean injected, available for use).
+- `SftpClient` (JSch) — file exchange via SFTP (factory bean, lazy connection).
+
+## Why each datastore?
+
+- **Postgres (R2DBC)**: system of record. Rigid schema, transactions, JOINs. Where data is **born** (`POST /api/orders` → `INSERT`).
+- **Redis**: hot-path cache. Sub-ms latency for `GET /api/orders/{id}`.
+- **MongoDB**: **denormalized read model** (CQRS-lite). Each `OrderView` document is already display-ready (no JOIN). Consumed via `?source=mongo`.
+- **Kafka**: event bus to propagate changes to other services (Notification, Analytics, Billing) without direct coupling.
 
 ---
 

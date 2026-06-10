@@ -27,8 +27,8 @@ Microsserviço reativo de **gestão de pedidos** (Orders), construído em **Java
 ### 1. Criar pedido — `POST /api/orders`
 Entrada validada (Bean Validation) → `OrderService.create`:
 1. Constrói o domínio `Order` (UUID, customerId, amount, currency ISO-3, status, createdAt).
-2. Persiste em **Postgres** via `OrderRepository` (R2DBC).
-3. Espelha em **MongoDB** (`mirrorToMongo`) — read model.
+2. Persiste em **Postgres** via `OrderRepository` (R2DBC) — **system of record**.
+3. Espelha em **MongoDB** (`mirrorToMongo`) — read model desnormalizado.
 4. Aquece cache em **Redis** (`warmCache`).
 5. Publica evento `OrderEventPublisher.publishCreated` no **Kafka**.
 6. `onErrorResume` em qualquer falha de fan-out: a API continua respondendo mesmo se Mongo/Kafka estiverem degradados.
@@ -37,8 +37,10 @@ Entrada validada (Bean Validation) → `OrderService.create`:
 - Tenta **Redis** primeiro.
 - Em miss, busca no **Postgres** (R2DBC), grava no cache e devolve.
 
-### 3. Listar pedidos — `GET /api/orders?customerId=X` ou `?status=X`
-- Lê direto do **Postgres** (R2DBC), retorna `Flux<Order>`.
+### 3. Listar pedidos — `GET /api/orders?customerId=X&source=postgres|mongo` ou `?status=X`
+- **`source=postgres`** (default): lê do **Postgres** via `OrderRepository` (R2DBC) — `service.listByCustomer`.
+- **`source=mongo`**: lê do **MongoDB** via `OrderViewRepository` — `service.listByCustomerFromMongo`. Demonstra o padrão **CQRS-lite**: Postgres é a fonte da verdade; Mongo é a projeção desnormalizada otimizada para leituras (ex: dashboard de cliente agregando todos os pedidos).
+- `?status=X` lê do Postgres.
 
 ### 4. Mudar status — `PUT /api/orders/{id}/status`
 1. Lê do Postgres.
@@ -50,10 +52,24 @@ Entrada validada (Bean Validation) → `OrderService.create`:
 ### 5. Consumir eventos — `OrderEventConsumer`
 - Listener Kafka para processar eventos `OrderCreated` / `OrderStatusChanged` publicados pelo próprio serviço ou por outros.
 
-### 6. Integrações legadas
-- `LegacyHttpClient` (WebClient) — chamadas HTTP a sistemas legados.
-- `LegacyErpClient` / `LegacyErpService` / `LegacyErpServiceImpl` (Apache CXF) — SOAP/XML para ERP.
-- `SftpClient` (JSch) — troca de arquivos via SFTP.
+### 6. Pedido enriquecido com sistema legado — `GET /api/orders/{id}/legacy-data`
+Compõe o pedido canônico com dados de um sistema HTTP legado (`LegacyHttpClient` → `WebClient`):
+1. Busca o pedido via `service.get(id)` (cache-aside Redis → Postgres).
+2. Faz `GET /customers/{customerId}/profile` no sistema legado.
+3. Devolve `{ order, legacyPayload, source }` num único response.
+4. `onErrorResume` em qualquer falha do legado: o pedido é devolvido com `source: "LEGACY_UNAVAILABLE"` — a API não cai junto.
+
+### 7. Integrações legadas
+- `LegacyHttpClient` (WebClient) — chamadas HTTP a sistemas legados. **Usado em produção no endpoint `/legacy-data`.**
+- `LegacyErpClient` / `LegacyErpService` / `LegacyErpServiceImpl` (Apache CXF) — SOAP/XML para ERP (bean injetado, disponível para uso).
+- `SftpClient` (JSch) — troca de arquivos via SFTP (factory bean, conexão lazy).
+
+## Por que cada banco?
+
+- **Postgres (R2DBC)**: system of record. Schema rígido, transações, JOINs. Onde o dado **nasce** (`POST /api/orders` → `INSERT`).
+- **Redis**: cache de hot-path. Latência sub-ms para o `GET /api/orders/{id}`.
+- **MongoDB**: **read model desnormalizado** (CQRS-lite). Cada documento `OrderView` já vem pronto para exibir (sem JOIN). Consumido via `?source=mongo`.
+- **Kafka**: event bus para propagar mudanças a outros serviços (Notification, Analytics, Billing) sem acoplamento direto.
 
 ---
 

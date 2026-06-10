@@ -1,6 +1,7 @@
 package com.codesolutions.api;
 
 import com.codesolutions.domain.Order;
+import com.codesolutions.integrations.http.LegacyHttpClient;
 import com.codesolutions.mongo.OrderView;
 import com.codesolutions.mongo.OrderViewRepository;
 import com.codesolutions.persistence.OrderEntity;
@@ -16,13 +17,18 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Application service — orchestrates the writes (R2DBC, Kafka, Mongo, Redis).
+ * Application service — orchestrates the writes (R2DBC, Kafka, Mongo, Redis)
+ * and reads (Redis cache, R2DBC, Mongo read model, legacy HTTP).
  *
  * Reactive composition patterns:
  *  - Cache-aside: read goes to Redis first, falls back to R2DBC
  *  - Write fan-out: 1 R2DBC write + 1 Kafka publish + 1 Mongo mirror + 1 cache set
+ *  - CQRS-lite: Postgres = system of record, Mongo = denormalized read model
+ *    queried for read-heavy paths (e.g. customer dashboard)
+ *  - Legacy enrichment: HTTP call to external system on read, wrapped in
+ *    onErrorResume so a degraded legacy doesn't take the API down
  *  - Error handling with onErrorResume to keep the API available even
- *    if downstream (Kafka, Mongo) is degraded
+ *    if downstream (Kafka, Mongo, legacy) is degraded
  */
 @Service
 public class OrderService {
@@ -31,17 +37,20 @@ public class OrderService {
     private final OrderViewRepository mongoRepo;
     private final OrderCache cache;
     private final com.codesolutions.kafka.OrderEventPublisher kafkaPublisher;
+    private final LegacyHttpClient legacyHttp;
 
     public OrderService(
             OrderRepository repo,
             OrderViewRepository mongoRepo,
             OrderCache cache,
-            com.codesolutions.kafka.OrderEventPublisher kafkaPublisher
+            com.codesolutions.kafka.OrderEventPublisher kafkaPublisher,
+            LegacyHttpClient legacyHttp
     ) {
         this.repo = repo;
         this.mongoRepo = mongoRepo;
         this.cache = cache;
         this.kafkaPublisher = kafkaPublisher;
+        this.legacyHttp = legacyHttp;
     }
 
     public Mono<Order> create(String customerId, BigDecimal amount, String currency) {
@@ -82,6 +91,25 @@ public class OrderService {
                 );
     }
 
+    /**
+     * Read path through the Mongo read model.
+     *
+     * Returns Flux of domain Orders (not OrderView records) to keep the API
+     * contract uniform. Used by the customer dashboard endpoint where the
+     * denormalized Mongo view is the source of truth.
+     */
+    public Flux<Order> listByCustomerFromMongo(String customerId) {
+        return mongoRepo.findByCustomerId(customerId)
+                .map(v -> new Order(
+                        UUID.fromString(v.id()),
+                        v.customerId(),
+                        v.amount(),
+                        v.currency(),
+                        v.status(),
+                        v.createdAt()
+                ));
+    }
+
     public Flux<Order> listByCustomer(String customerId) {
         return repo.findByCustomerId(customerId).map(OrderEntity::toDomain);
     }
@@ -100,6 +128,19 @@ public class OrderService {
                 .flatMap(o -> kafkaPublisher.publishStatusChanged(o).thenReturn(o));
     }
 
+    /**
+     * Compose the canonical order with legacy data fetched from an external
+     * HTTP system. If the legacy system is down, we still return the order
+     * (with a null/empty legacy payload) so the API stays available.
+     */
+    public Mono<OrderWithLegacy> getWithLegacyData(UUID id) {
+        return get(id).flatMap(order ->
+            legacyHttp.get("/customers/" + order.customerId() + "/profile")
+                .map(legacy -> new OrderWithLegacy(order, legacy, "OK"))
+                .onErrorResume(e -> Mono.just(new OrderWithLegacy(order, "{}", "LEGACY_UNAVAILABLE: " + e.getMessage())))
+        );
+    }
+
     private Mono<Order> mirrorToMongo(Order order) {
         OrderView view = OrderView.fromDomain(order);
         return mongoRepo.save(view).thenReturn(order);
@@ -108,4 +149,7 @@ public class OrderService {
     private Mono<Order> warmCache(Order order) {
         return cache.put(order).thenReturn(order);
     }
+
+    /** Composite response combining the order with the legacy payload. */
+    public record OrderWithLegacy(Order order, String legacyPayload, String source) {}
 }

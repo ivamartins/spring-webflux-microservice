@@ -33,13 +33,17 @@ Usuário (HTTP GET)
 **Caminho resumido:**
 `OrderController → OrderService → (Redis → Postgres → Redis)`
 
-## 3. Listar pedidos — `GET /api/orders?customerId=X` ou `?status=X`
+## 3. Listar pedidos — `GET /api/orders?customerId=X&source=postgres|mongo` ou `?status=X`
 
 ```
 Usuário (HTTP GET)
   └─> OrderController.list()               [api/OrderController]
-        └─> OrderService.listByCustomer()  [api/OrderService]
-              └─> OrderRepository.findByCustomerId()  [persistence/OrderRepository] ──> Postgres
+        ├─> source=postgres (default)
+        │     └─> OrderService.listByCustomer()  [api/OrderService]
+        │           └─> OrderRepository.findByCustomerId()  [persistence/OrderRepository] ──> Postgres
+        └─> source=mongo
+              └─> OrderService.listByCustomerFromMongo()  [api/OrderService]
+                    └─> OrderViewRepository.findByCustomerId()  [mongo/OrderViewRepository] ──> MongoDB
 ```
 
 ## 4. Mudar status — `PUT /api/orders/{id}/status`
@@ -66,13 +70,29 @@ Kafka (OrderCreated / OrderStatusChanged)
         └─> ... (handler customizado, atualmente placeholder)
 ```
 
-## 6. Integrações legadas
+## 6. Pedido enriquecido com sistema legado — `GET /api/orders/{id}/legacy-data`
+
+```
+Usuário (HTTP GET)
+  └─> OrderController.getWithLegacyData()  [api/OrderController]
+        └─> OrderService.getWithLegacyData()  [api/OrderService]
+              ├─> OrderService.get(id)     [api/OrderService]
+              │     ├─> OrderCache.get()         [redis/OrderCache]            ──> Redis
+              │     └─ (miss) OrderRepository.findById()  [persistence/OrderRepository] ──> Postgres
+              └─> LegacyHttpClient.get("/customers/{id}/profile")  [integrations/http/] ──> Legacy HTTP
+                    └─ (em erro) onErrorResume → retorna OrderWithLegacy(order, "{}", "LEGACY_UNAVAILABLE")
+```
+
+**Caminho resumido:**
+`OrderController → OrderService → (Redis → Postgres) + LegacyHttpClient → Sistema Legado`
+
+## 7. Integrações legadas
 
 São beans injetados via `IntegrationConfig` e expostos para uso em outros serviços:
 
 ```
 OrderService (ou outro consumidor)
-  ├─> LegacyHttpClient (WebClient)         [integrations/http/]
+  ├─> LegacyHttpClient (WebClient)         [integrations/http/]   ← usado em /legacy-data
   ├─> LegacyErpService (CXF/SOAP)          [integrations/soap/]
   └─> SftpClient (JSch)                    [integrations/sftp/]
 ```

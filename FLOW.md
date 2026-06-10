@@ -33,13 +33,17 @@ User (HTTP GET)
 **Summary path:**
 `OrderController → OrderService → (Redis → Postgres → Redis)`
 
-## 3. List orders — `GET /api/orders?customerId=X` or `?status=X`
+## 3. List orders — `GET /api/orders?customerId=X&source=postgres|mongo` or `?status=X`
 
 ```
 User (HTTP GET)
   └─> OrderController.list()               [api/OrderController]
-        └─> OrderService.listByCustomer()  [api/OrderService]
-              └─> OrderRepository.findByCustomerId()  [persistence/OrderRepository] ──> Postgres
+        ├─> source=postgres (default)
+        │     └─> OrderService.listByCustomer()  [api/OrderService]
+        │           └─> OrderRepository.findByCustomerId()  [persistence/OrderRepository] ──> Postgres
+        └─> source=mongo
+              └─> OrderService.listByCustomerFromMongo()  [api/OrderService]
+                    └─> OrderViewRepository.findByCustomerId()  [mongo/OrderViewRepository] ──> MongoDB
 ```
 
 ## 4. Change status — `PUT /api/orders/{id}/status`
@@ -66,13 +70,29 @@ Kafka (OrderCreated / OrderStatusChanged)
         └─> ... (custom handler, currently a placeholder)
 ```
 
-## 6. Legacy integrations
+## 6. Order enriched with legacy system — `GET /api/orders/{id}/legacy-data`
+
+```
+User (HTTP GET)
+  └─> OrderController.getWithLegacyData()  [api/OrderController]
+        └─> OrderService.getWithLegacyData()  [api/OrderService]
+              ├─> OrderService.get(id)     [api/OrderService]
+              │     ├─> OrderCache.get()         [redis/OrderCache]            ──> Redis
+              │     └─ (miss) OrderRepository.findById()  [persistence/OrderRepository] ──> Postgres
+              └─> LegacyHttpClient.get("/customers/{id}/profile")  [integrations/http/] ──> Legacy HTTP
+                    └─ (on error) onErrorResume → returns OrderWithLegacy(order, "{}", "LEGACY_UNAVAILABLE")
+```
+
+**Summary path:**
+`OrderController → OrderService → (Redis → Postgres) + LegacyHttpClient → Legacy System`
+
+## 7. Legacy integrations
 
 Beans injected via `IntegrationConfig` and exposed for use in other services:
 
 ```
 OrderService (or other consumer)
-  ├─> LegacyHttpClient (WebClient)         [integrations/http/]
+  ├─> LegacyHttpClient (WebClient)         [integrations/http/]   ← used in /legacy-data
   ├─> LegacyErpService (CXF/SOAP)          [integrations/soap/]
   └─> SftpClient (JSch)                    [integrations/sftp/]
 ```
