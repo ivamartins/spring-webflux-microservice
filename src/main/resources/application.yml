@@ -82,3 +82,11 @@ integrations:
     port: ${SFTP_PORT:22}
     user: ${SFTP_USER:dummy}
     private-key-path: ${SFTP_KEY_PATH:/dev/null}
+
+# Application-specific config
+app:
+  cache:
+    orders:
+      # ISO-8601 duration: PT5M = 5 minutes, PT1H = 1 hour, PT30S = 30 seconds
+      # Override at runtime with: APP_CACHE_ORDERS_TTL=PT10M
+      ttl: ${APP_CACHE_ORDERS_TTL:PT5M}

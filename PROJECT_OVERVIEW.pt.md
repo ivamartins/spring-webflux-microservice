@@ -67,20 +67,47 @@ Compõe o pedido canônico com dados de um sistema HTTP legado (`LegacyHttpClien
 ## Por que cada banco?
 
 - **Postgres (R2DBC)**: system of record. Schema rígido, transações, JOINs. Onde o dado **nasce** (`POST /api/orders` → `INSERT`).
-- **Redis**: cache de hot-path. Latência sub-ms para o `GET /api/orders/{id}`.
+- **Redis**: cache de hot-path. Latência sub-ms para o `GET /api/orders/{id}`. TTL configurável via `app.cache.orders.ttl` (ISO-8601, default `PT5M`). Inspecionável em runtime via `GET /api/orders/info`.
 - **MongoDB**: **read model desnormalizado** (CQRS-lite). Cada documento `OrderView` já vem pronto para exibir (sem JOIN). Consumido via `?source=mongo`.
 - **Kafka**: event bus para propagar mudanças a outros serviços (Notification, Analytics, Billing) sem acoplamento direto.
+
+## Cache TTL
+
+Redis é uma camada **cache-aside** (o consumidor não escolhe — o `OrderService` lê o Redis primeiro, e em caso de miss cai no Postgres e re-popula o cache). O TTL é configurável por ambiente:
+
+```yaml
+app:
+  cache:
+    orders:
+      ttl: PT5M  # ISO-8601: PT30S=30s, PT5M=5m, PT1H=1h
+```
+
+Override em runtime: `APP_CACHE_ORDERS_TTL=PT10M java -jar app.jar`.
+
+**Trade-off:**
+- **TTL curto (ex: 30s)**: mais consistente (menos dado stale), mais leituras no Postgres, menor hit ratio.
+- **TTL longo (ex: 1h)**: menos carga no Postgres, maior hit ratio, mais dado stale possível.
+- O cache também é **explicitamente atualizado em cada write** (`changeStatus` chama `cache.put`), então o TTL importa mais para expiração natural entre writes — não para estado stale após mutações.
+
+Inspecionar o TTL ativo em runtime:
+```bash
+curl http://localhost:8080/api/orders/info
+# → {"status":"ok","cache.orders.ttl":"PT5M"}
+```
 
 ---
 
 ## Endpoints
 
 | Método | Path                              | Descrição                                |
-|--------|-----------------------------------|------------------------------------------|
+|--------|-----------------------------------|--------------------------------------------|
 | GET    | `/api/orders/health`              | Liveness                                 |
+| GET    | `/api/orders/info`                | Info do serviço + TTL atual do cache     |
 | POST   | `/api/orders`                     | Criar pedido                             |
 | GET    | `/api/orders/{id}`                | Ler pedido (cache-aside)                 |
-| GET    | `/api/orders?customerId=X`        | Listar por cliente                       |
+| GET    | `/api/orders/{id}/legacy-data`    | Ler pedido enriquecido com dados do legado HTTP |
+| GET    | `/api/orders?customerId=X`        | Listar por cliente (default: Postgres)   |
+| GET    | `/api/orders?customerId=X&source=mongo` | Listar por cliente a partir do Mongo read model |
 | GET    | `/api/orders?status=X`            | Listar por status                        |
 | PUT    | `/api/orders/{id}/status`         | Atualizar status                         |
 | GET    | `/actuator/health`                | Health check (Spring Actuator)           |

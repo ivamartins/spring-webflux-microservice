@@ -53,6 +53,11 @@ public class OrderService {
         this.legacyHttp = legacyHttp;
     }
 
+    /** Exposes the configured cache TTL for observability. */
+    public String cacheTtlDescription() {
+        return cache.ttl().toString();
+    }
+
     public Mono<Order> create(String customerId, BigDecimal amount, String currency) {
         Objects.requireNonNull(customerId, "customerId");
         Objects.requireNonNull(amount, "amount");

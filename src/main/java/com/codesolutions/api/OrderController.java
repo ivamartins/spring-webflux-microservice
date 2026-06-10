@@ -39,6 +39,18 @@ public class OrderController {
         return Mono.just(ResponseEntity.ok("ok"));
     }
 
+    /**
+     * Liveness + cache TTL inspection.
+     * Useful to confirm at runtime that the TTL config is being read correctly.
+     */
+    @GetMapping("/info")
+    public Mono<ResponseEntity<java.util.Map<String, Object>>> info() {
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("status", "ok");
+        body.put("cache.orders.ttl", service.cacheTtlDescription());
+        return Mono.just(ResponseEntity.ok(body));
+    }
+
     @PostMapping
     public Mono<ResponseEntity<Order>> create(@Valid @RequestBody CreateOrderRequest req) {
         return service.create(req.customerId(), req.amount(), req.currency())
