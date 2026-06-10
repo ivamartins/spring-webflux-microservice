@@ -1,0 +1,167 @@
+# spring-webflux-microservice — Overview & flow
+
+Reactive **Order management** microservice built with **Java 21 + Spring Boot 3.3 + WebFlux**. Java 21, Spring Boot/WebFlux, microservices, Kafka messaging, legacy integrations (HTTP/SOAP/SFTP), CI/CD (GitLab + Jenkins).
+
+## Stack (with versions)
+
+- **Java 21** (records, pattern matching, virtual-thread-ready)
+- **Spring Boot 3.3.4** + **Spring WebFlux** (reactive, non-blocking)
+- **Spring Data R2DBC** (Postgres R2DBC driver `1.0.5.RELEASE`) → Postgres (system of record)
+- **Spring Data MongoDB Reactive** → denormalized read model
+- **Spring Data Redis Reactive** → hot-path cache
+- **Spring Kafka** → event fan-out
+- **Apache CXF 4.0.5** (`cxf-spring-boot-starter-jaxws`) → SOAP client
+- **JSch 0.1.55** → SFTP client
+- **WebClient** (Spring) → legacy HTTP client
+- **Micrometer + Prometheus + Spring Actuator** → observability
+- **springdoc-openapi 2.6.0** → OpenAPI/Swagger UI
+- **Testcontainers 1.20.2** (junit-jupiter, postgresql, mongodb, kafka) → E2E
+- **OkHttp MockWebServer 4.12.0** → HTTP mocks in tests
+- **JVM tuning**: G1GC, `MaxGCPauseMillis=200`, string dedup, GC logs
+- **CI**: `.gitlab-ci.yml` + `Jenkinsfile`
+
+---
+
+## Main flow
+
+### 1. Create order — `POST /api/orders`
+Bean Validation on the request body → `OrderService.create`:
+1. Builds the `Order` domain (UUID, customerId, amount, ISO-3 currency, status, createdAt).
+2. Persists in **Postgres** via `OrderRepository` (R2DBC).
+3. Mirrors to **MongoDB** (`mirrorToMongo`) — read model.
+4. Warms cache in **Redis** (`warmCache`).
+5. Publishes `OrderEventPublisher.publishCreated` to **Kafka**.
+6. `onErrorResume` on any fan-out failure: the API keeps responding even if Mongo/Kafka are degraded.
+
+### 2. Get order — `GET /api/orders/{id}` (cache-aside)
+- Tries **Redis** first.
+- On miss, reads **Postgres** (R2DBC), writes to cache and returns.
+
+### 3. List orders — `GET /api/orders?customerId=X` or `?status=X`
+- Reads directly from **Postgres** (R2DBC), returns `Flux<Order>`.
+
+### 4. Change status — `PUT /api/orders/{id}/status`
+1. Reads from Postgres.
+2. Updates status, re-saves in Postgres.
+3. Re-mirrors to Mongo.
+4. Re-warms cache.
+5. Publishes `OrderEventPublisher.publishStatusChanged` to Kafka.
+
+### 5. Consume events — `OrderEventConsumer`
+- Kafka listener that processes `OrderCreated` / `OrderStatusChanged` events published by the service itself or by other services.
+
+### 6. Legacy integrations
+- `LegacyHttpClient` (WebClient) — HTTP calls to legacy systems.
+- `LegacyErpClient` / `LegacyErpService` / `LegacyErpServiceImpl` (Apache CXF) — SOAP/XML to ERP.
+- `SftpClient` (JSch) — file exchange via SFTP.
+
+---
+
+## Endpoints
+
+| Method | Path                              | Description                                |
+|--------|-----------------------------------|--------------------------------------------|
+| GET    | `/api/orders/health`              | Liveness                                   |
+| POST   | `/api/orders`                     | Create order                               |
+| GET    | `/api/orders/{id}`                | Read order (cache-aside)                   |
+| GET    | `/api/orders?customerId=X`        | List by customer                           |
+| GET    | `/api/orders?status=X`            | List by status                             |
+| PUT    | `/api/orders/{id}/status`         | Update status                              |
+| GET    | `/actuator/health`                | Spring Actuator health check               |
+| GET    | `/actuator/prometheus`            | Prometheus metrics                         |
+| GET    | `/v3/api-docs`                    | OpenAPI spec (springdoc)                   |
+
+---
+
+## What's in each subfolder
+
+### Root
+- `pom.xml` — Maven (Java 21, Spring Boot 3.3.4, all dependencies above).
+- `Dockerfile` — app image.
+- `Jenkinsfile` — Jenkins pipeline.
+- `.gitlab-ci.yml` — GitLab CI pipeline.
+- `.gitignore` — IDEs, build, classes.
+- `README.md` — quickstart + endpoints.
+- `docs/adr/0001-postgres-r2dbc.md` — ADR: Postgres as system of record via R2DBC.
+- `docs/adr/0002-mongo-projection.md` — ADR: Mongo as projection/read model.
+- `docs/adr/0003-kafka-fanout.md` — ADR: async fan-out via Kafka.
+- `docs/adr/0004-gc-tuning.md` — ADR: GC tuning (G1GC, 200ms pause target).
+- `docs/system-design/README.md` — architectural overview.
+- `.idea/` — IntelliJ config.
+- `target/` — Maven build (compiled classes, surefire reports).
+
+### `src/main/java/com/codesolutions/`
+- `Application.java` — entry point `@SpringBootApplication`.
+
+### `src/main/java/com/codesolutions/api/`
+- `OrderController.java` — reactive REST controller (Mono/Flux), Bean Validation, record-based DTOs.
+- `OrderService.java` — service: orchestrates R2DBC + Mongo + Redis + Kafka, cache-aside and write fan-out patterns, `onErrorResume` for resilience.
+- `ApiExceptionHandler.java` — global error handler.
+
+### `src/main/java/com/codesolutions/config/`
+- `IntegrationConfig.java` — legacy integration beans (SFTP, SOAP, HTTP).
+- `RedisConfig.java` — reactive Redis configuration.
+
+### `src/main/java/com/codesolutions/domain/`
+- `Order.java` — domain model (Java 21 record).
+
+### `src/main/java/com/codesolutions/persistence/`
+- `OrderEntity.java` — R2DBC entity mapped to the `orders` table.
+- `OrderRepository.java` — `ReactiveCrudRepository` with queries by `customerId` and `status`.
+
+### `src/main/java/com/codesolutions/mongo/`
+- `OrderView.java` — denormalized Mongo document (read model).
+- `OrderViewRepository.java` — `ReactiveMongoRepository`.
+
+### `src/main/java/com/codesolutions/redis/`
+- `OrderCache.java` — reactive cache wrapper (manual cache-aside).
+
+### `src/main/java/com/codesolutions/kafka/`
+- `OrderEventPublisher.java` — publishes `OrderCreated` / `OrderStatusChanged` to Kafka.
+- `OrderEventConsumer.java` — consumes order events.
+
+### `src/main/java/com/codesolutions/integrations/`
+- `http/LegacyHttpClient.java` — `WebClient` for legacy REST APIs.
+- `soap/LegacyErpClient.java` — SOAP interface.
+- `soap/LegacyErpService.java` — legacy ERP service contract.
+- `soap/LegacyErpServiceImpl.java` — CXF implementation.
+- `sftp/SftpClient.java` — SFTP client (JSch).
+
+### `src/main/resources/`
+- `application.yml` — configs for Postgres, Mongo, Redis, Kafka, Actuator, JVM.
+- `schema.sql` — DDL for the `orders` table.
+
+### `src/test/java/com/codesolutions/`
+- `api/OrderControllerTest.java` — WebFlux slice tests.
+- `api/OrderServiceTest.java` — service unit tests.
+- `kafka/OrderEventPublisherTest.java` — Kafka publisher tests.
+- `kafka/KafkaContractTestConfig.java` — Testcontainers test config.
+- `integrations/soap/LegacyErpServiceTest.java` — SOAP client tests.
+
+---
+
+## How to run locally
+
+```bash
+docker run -d --name pg     -p 5432:5432  -e POSTGRES_PASSWORD=postgres postgres:15
+docker run -d --name mongo  -p 27017:27017 mongo:7
+docker run -d --name redis  -p 6379:6379  redis:7
+docker run -d --name kafka  -p 9092:9092  apache/kafka:3.7.0   # see README for envs
+
+mvn spring-boot:run
+```
+
+```bash
+curl -X POST http://localhost:8080/api/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"customerId":"c-1","amount":99.9,"currency":"USD"}'
+
+curl http://localhost:8080/api/orders/<id>
+```
+
+## How to test
+
+```bash
+mvn test      # unit + slice (no infra)
+mvn verify    # E2E with Testcontainers (needs Docker)
+```
