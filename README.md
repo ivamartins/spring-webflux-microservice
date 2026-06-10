@@ -1,6 +1,6 @@
 # spring-webflux-microservice
 
-Production-grade **Java 21 + Spring Boot 3 + WebFlux** reference microservice. Covers the **Java Sr (Híbrido)** JD (Java 21, JVM tuning, REST APIs, SQL/NoSQL, CI/CD with GitLab + Jenkins, Spring Boot + WebFlux, Kafka, legacy integrations).
+Production-grade **Java 21 + Spring Boot 3 + WebFlux** reference microservice. Java 21, JVM tuning, REST APIs, SQL/NoSQL, CI/CD with GitLab + Jenkins, Spring Boot + WebFlux, Kafka, legacy integrations.
 
 ## Stack
 
@@ -77,5 +77,5 @@ See `docs/system-design/README.md` and `docs/adr/*`.
 ## See also
 
 - `quarkus-java-base` (Java portfolio)
-- `akka-scala-base` (Scala/Akka — Senior SWE role)
+- `akka-scala-base` (Scala/Akka)
 - `scala-akka-aws-microservice` (Scala on AWS)
