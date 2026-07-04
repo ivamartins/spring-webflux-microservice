@@ -1,81 +1,57 @@
 # spring-webflux-microservice
 
-Production-grade **Java 21 + Spring Boot 3 + WebFlux** reference microservice. Java 21, JVM tuning, REST APIs, SQL/NoSQL, CI/CD with GitLab + Jenkins, Spring Boot + WebFlux, Kafka, legacy integrations.
+> Part of the **Code Solutions Java Modernization Framework** product line. Reactive Java 21 + Spring Boot 3 + WebFlux reference microservice, with Kafka and R2DBC.
 
-## Stack
+Production-grade **Java 21 + Spring Boot 3 + WebFlux** reactive microservice reference.
 
-- **Java 21** (records, pattern matching, virtual-thread-ready)
-- **Spring Boot 3.3.4** + **Spring WebFlux** (reactive)
-- **Spring Data R2DBC** (Postgres) — system of record
-- **Spring Data MongoDB Reactive** — denormalized read model
-- **Spring Data Redis Reactive** — hot-path cache
-- **Spring Kafka** — event-driven fan-out
-- **Apache CXF** — SOAP client
-- **JSch** — SFTP client
-- **WebClient** — HTTP legacy client
-- **Micrometer + Prometheus + Actuator** — observability
-- **JVM tuning**: G1GC, `MaxGCPauseMillis=200`, string dedup, GC logs
-- **CI**: GitLab CI + Jenkinsfile
+## Why this base
 
-## How to run (local)
+- **Reactive end-to-end** (WebFlux + R2DBC) — high throughput, non-blocking I/O
+- **Java 21 LTS** with virtual threads ready
+- **Kafka integration** for event-driven patterns
+- **Reference architecture** for greenfield reactive services and modernization of blocking Spring MVC apps
+
+## Quick start
+
+**Prerequisites:** Java 21+ and Maven (or use the wrapper `./mvnw`).
 
 ```bash
-docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:15
-docker run -d --name mongo -p 27017:27017 mongo:7
-docker run -d --name redis -p 6379:6379 redis:7
-docker run -d --name kafka -p 9092:9092 \
-    -e KAFKA_NODE_ID=1 \
-    -e KAFKA_PROCESS_ROLES=broker,controller \
-    -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093 \
-    -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
-    -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
-    -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT \
-    -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093 \
-    apache/kafka:3.7.0
-
-mvn spring-boot:run
+./mvnw compile spring-boot:run
 ```
 
-Then:
+The app will start on `http://localhost:8080`.
+
+## Run the tests
 
 ```bash
-curl -X POST http://localhost:8080/api/orders \
-  -H 'Content-Type: application/json' \
-  -d '{"customerId":"c-1","amount":99.9,"currency":"USD"}'
-
-curl http://localhost:8080/api/orders/<id>
+./mvnw test
 ```
 
-## How to test
+## API endpoints
 
-```bash
-# Unit + slice tests (no infra needed)
-mvn test
+- `GET    /api/info` — app info
+- `GET    /api/products` — list products (reactive, R2DBC)
+- `POST   /api/products` — create product
+- `GET    /api/events` — Kafka event stream (SSE)
 
-# Full E2E with Testcontainers (requires Docker)
-mvn verify
-```
+## Tech stack
 
-## Endpoints
+- Java 21 (LTS)
+- Spring Boot 3
+- Spring WebFlux (reactive)
+- Spring Data R2DBC
+- Apache Kafka
+- Maven build tool
 
-| Method | Path | Description |
-|---|---|---|
-| GET    | /api/orders/health       | liveness |
-| POST   | /api/orders              | create |
-| GET    | /api/orders/{id}         | read (cache-aside) |
-| GET    | /api/orders?customerId=X | list by customer |
-| GET    | /api/orders?status=X     | list by status |
-| PUT    | /api/orders/{id}/status  | update status |
-| GET    | /actuator/health         | Spring Actuator health |
-| GET    | /actuator/prometheus     | Prometheus metrics |
-| GET    | /v3/api-docs             | OpenAPI spec (springdoc) |
-
-## Architecture
-
-See `docs/system-design/README.md` and `docs/adr/*`.
+> **Português?** Veja [`README.pt-BR.md`](./README.pt-BR.md).
 
 ## See also
 
-- `quarkus-java-base` (Java portfolio)
-- `akka-scala-base` (Scala/Akka)
-- `scala-akka-aws-microservice` (Scala on AWS)
+- **Related base**: [quarkus-java-base](https://github.com/ivamartins/quarkus-java-base), [java-product-api](https://github.com/ivamartins/java-product-api)
+- **Product line**: [Java Modernization Framework](https://ivamartins.github.io/code-solutions-site/#produtos)
+- **Code Solutions on LinkedIn**: [linkedin.com/company/code-solutions-it](https://www.linkedin.com/company/code-solutions-it/)
+- **All Code Solutions open source**: [github.com/ivamartins](https://github.com/ivamartins)
+
+## License
+
+MIT — see `LICENSE`.
