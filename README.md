@@ -1,5 +1,9 @@
 # spring-webflux-microservice
 
+[![CI](https://github.com/ivamartins/spring-webflux-microservice/actions/workflows/ci.yml/badge.svg)](https://github.com/ivamartins/spring-webflux-microservice/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Java](https://img.shields.io/badge/Java-21-blue)](https://openjdk.org/)
+
 > Part of the **Code Solutions Java Modernization Framework** product line. Reactive Java 21 + Spring Boot 3 + WebFlux reference microservice, with Kafka and R2DBC.
 
 Production-grade **Java 21 + Spring Boot 3 + WebFlux** reactive microservice reference.
